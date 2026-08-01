@@ -1,0 +1,1 @@
+import{h as e,t}from"./utils-DKEQ8a1F.js";var n=e();function r({children:e,className:r}){return(0,n.jsx)(`div`,{className:t(`app-shell`,r),children:e})}export{r as t};
