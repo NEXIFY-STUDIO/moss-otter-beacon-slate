@@ -1,0 +1,4 @@
+- COSY/Cozy workflow: after every S-prompt run acceptance tests (typecheck 0 errors, no bugs, light+dark tokens), then check off with [x] in COSY_PROMPTS_25.md [2026-08-01]
+- COSY project source of truth: GitHub NEXIFY-STUDIO/cozy-ai-studio (prod https://cozy-ai-studio.vercel.app) [2026-08-01]
+- S01 Strict foundation + Warm Brutalism tokens: DONE — strict TS, cn(), cream/terracotta/choco tokens, shadow-brutalist, Playfair/Inter/Fira, dark class, env.example [2026-08-01]
+- Tracking file: artifacts/COSY_PROMPTS_25.md is the checklist for S01–S25 super-prompts [2026-08-01]

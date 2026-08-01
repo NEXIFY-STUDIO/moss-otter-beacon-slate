@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { ChevronDown, Files } from "lucide-react";
 import { FileTree } from "@/components/editor/FileTree";
-import { DiffView } from "@/components/editor/DiffView";
+import { MonacoDiffEditor } from "@/components/editor/MonacoDiffEditor";
+import { DiffActions } from "@/components/editor/DiffActions";
 import { HitLCard } from "@/components/editor/HitLCard";
 import { useFileStore } from "@/stores/use-file-store";
 import { cn } from "@/lib/utils";
@@ -18,12 +19,13 @@ export function CenterPanel({
   const [treeOpen, setTreeOpen] = useState(!mobile);
 
   const showProposal =
-    proposal &&
-    (!activeFilePath || proposal.path === activeFilePath || !active);
+    proposal !== null &&
+    (activeFilePath === null ||
+      proposal.path === activeFilePath ||
+      active === undefined);
 
   return (
     <section className="h-full flex flex-col sm:flex-row min-h-0 bg-cream dark:bg-slate relative overflow-hidden">
-      {/* Mobile: collapsible file drawer strip */}
       {mobile ? (
         <div className="shrink-0 border-b-2 border-charcoal/10 dark:border-cream/10 bg-cream-secondary/60 dark:bg-slate-card/50">
           <button
@@ -44,14 +46,11 @@ export function CenterPanel({
               aria-hidden
             />
           </button>
-          {treeOpen && (
+          {treeOpen ? (
             <div className="max-h-[40dvh] overflow-y-auto border-t border-charcoal/10 dark:border-cream/10">
-              <FileTree
-                onFileSelect={() => setTreeOpen(false)}
-                compact
-              />
+              <FileTree onFileSelect={() => setTreeOpen(false)} compact />
             </div>
-          )}
+          ) : null}
         </div>
       ) : (
         <div className="w-[min(200px,34%)] shrink-0 min-w-[120px] min-h-0 hidden sm:block">
@@ -59,19 +58,21 @@ export function CenterPanel({
         </div>
       )}
 
-      {/* Desktop also shows tree on very small if not mobile prop — keep sm+ */}
-      {!mobile && (
+      {!mobile ? (
         <div className="sm:hidden shrink-0 border-b border-charcoal/10 max-h-[30%] overflow-auto">
           <FileTree compact />
         </div>
-      )}
+      ) : null}
 
       <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
-        <DiffView
+        {showProposal && proposal ? <DiffActions /> : null}
+        <MonacoDiffEditor
           proposal={showProposal ? proposal : null}
           fallbackContent={active?.content ?? "// Select a file"}
           language={
-            showProposal ? proposal.language : (active?.language ?? "txt")
+            showProposal && proposal
+              ? proposal.language
+              : (active?.language ?? "txt")
           }
         />
         <HitLCard compact={mobile} />

@@ -54,7 +54,21 @@ export const promptInputSchema = z.object({
   imageDataUrls: z.array(z.string()).max(4).optional(),
 });
 
+/** Zod contract for AiInteractionLog rows (client → server). */
+export const aiInteractionLogInputSchema = z.object({
+  projectId: z.string().min(1).max(128),
+  agentType: agentTypeSchema,
+  model: z.string().min(1).max(128),
+  prompt: z.string().min(1).max(8000),
+  responseSummary: z.string().max(4000).optional(),
+  latencyMs: z.number().int().min(0).max(3_600_000),
+  tokens: z.number().int().min(0).max(10_000_000),
+  imageCount: z.number().int().min(0).max(4).default(0),
+  status: z.enum(["ok", "error", "aborted"]).default("ok"),
+});
+
 export type G0Plan = z.infer<typeof g0PlanSchema>;
 export type G1CodeMap = z.infer<typeof g1CodeMapSchema>;
 export type G2Audit = z.infer<typeof g2AuditSchema>;
 export type PromptInput = z.infer<typeof promptInputSchema>;
+export type AiInteractionLogInput = z.infer<typeof aiInteractionLogInputSchema>;

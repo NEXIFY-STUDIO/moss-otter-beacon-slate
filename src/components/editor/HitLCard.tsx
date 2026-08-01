@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ export function HitLCard({
   compact?: boolean;
 }): React.JSX.Element {
   const hitlVisible = useAgentStore((s) => s.hitlVisible);
+  const rejectionOpen = useAgentStore((s) => s.rejectionOpen);
   const setHitlVisible = useAgentStore((s) => s.setHitlVisible);
   const setRejectionOpen = useAgentStore((s) => s.setRejectionOpen);
   const setPhase = useAgentStore((s) => s.setPhase);
@@ -20,22 +21,29 @@ export function HitLCard({
   const pushStatus = useAgentStore((s) => s.pushStatus);
   const applyProposal = useFileStore((s) => s.applyProposal);
   const proposal = useFileStore((s) => s.proposal);
+  const batchCount = proposal?.batch?.length ?? 0;
   const refreshPreview = useUiStore((s) => s.refreshPreview);
   const setMobilePane = useUiStore((s) => s.setMobilePane);
+  const approvingRef = useRef(false);
 
   const onApprove = () => {
+    if (approvingRef.current) return;
+    approvingRef.current = true;
     applyProposal();
     setHitlVisible(false);
     setPhase("done");
-    pushStatus("Approved · file updated · preview refreshed");
+    pushStatus("Approved · multi-file site written · preview refreshed");
     addMessage({
       role: "assistant",
       agentType: "ORCHESTRATOR",
       content:
-        "Zmena schválená. Súbor aktualizovaný a live preview refreshnutý.",
+        "Schválené. Všetky stránky/sekcie zapísané do projektu a preview obnovené (in-app navigácia).",
     });
     refreshPreview();
     if (compact) setMobilePane("preview");
+    window.setTimeout(() => {
+      approvingRef.current = false;
+    }, 200);
   };
 
   const onReject = () => {
@@ -43,7 +51,7 @@ export function HitLCard({
   };
 
   useEffect(() => {
-    if (!hitlVisible) return;
+    if (!hitlVisible || rejectionOpen) return;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
@@ -61,14 +69,12 @@ export function HitLCard({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hitlVisible, compact]);
+  }, [hitlVisible, rejectionOpen, compact]);
 
   return (
     <AnimatePresence>
-      {hitlVisible && proposal && (
+      {hitlVisible && proposal ? (
         <motion.div
-          // Don't start at opacity 0 when parent was display:none (mobile tabs) —
-          // that freezes the card invisible after switching to Code.
           initial={compact ? false : { opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 10 }}
@@ -90,7 +96,7 @@ export function HitLCard({
             </h3>
             <p className="text-xs text-charcoal/60 dark:text-cream/55 mt-1 leading-relaxed line-clamp-2">
               {proposal.summary} ·{" "}
-              <span className="font-mono">{proposal.path}</span>
+              <span className="font-mono">{proposal.path}{batchCount > 0 ? ` · +${batchCount} pages/files` : ""}</span>
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <Button
@@ -117,7 +123,7 @@ export function HitLCard({
             </div>
           </div>
         </motion.div>
-      )}
+      ) : null}
     </AnimatePresence>
   );
 }

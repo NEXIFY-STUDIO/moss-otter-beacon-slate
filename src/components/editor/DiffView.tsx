@@ -1,60 +1,7 @@
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { computeLines } from "@/lib/diff";
 import type { DiffProposal } from "@/types/file";
-
-interface DiffLine {
-  type: "same" | "add" | "del" | "ctx";
-  left?: string | undefined;
-  right?: string | undefined;
-  text: string;
-}
-
-function computeLines(original: string, modified: string): DiffLine[] {
-  const a = original.split("\n");
-  const b = modified.split("\n");
-  const n = a.length;
-  const m = b.length;
-  const dp: number[][] = Array.from({ length: n + 1 }, () =>
-    Array.from({ length: m + 1 }, () => 0),
-  );
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      const row = dp[i];
-      const nextRow = dp[i + 1];
-      if (!row || !nextRow) continue;
-      if (a[i] === b[j]) {
-        row[j] = (nextRow[j + 1] ?? 0) + 1;
-      } else {
-        row[j] = Math.max(nextRow[j] ?? 0, row[j + 1] ?? 0);
-      }
-    }
-  }
-  const lines: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      lines.push({ type: "same", text: a[i] ?? "" });
-      i++;
-      j++;
-    } else if ((dp[i + 1]?.[j] ?? 0) >= (dp[i]?.[j + 1] ?? 0)) {
-      lines.push({ type: "del", text: a[i] ?? "" });
-      i++;
-    } else {
-      lines.push({ type: "add", text: b[j] ?? "" });
-      j++;
-    }
-  }
-  while (i < n) {
-    lines.push({ type: "del", text: a[i] ?? "" });
-    i++;
-  }
-  while (j < m) {
-    lines.push({ type: "add", text: b[j] ?? "" });
-    j++;
-  }
-  return lines;
-}
 
 interface DiffViewProps {
   proposal: DiffProposal | null;
@@ -83,11 +30,11 @@ export function DiffView({
         <span className="font-mono text-charcoal/60 dark:text-cream/55">
           {proposal ? `${proposal.path} · diff` : "editor"} · {language}
         </span>
-        {proposal && (
+        {proposal ? (
           <span className="text-charcoal/45 dark:text-cream/40 truncate max-w-[50%]">
             {proposal.summary}
           </span>
-        )}
+        ) : null}
       </div>
       <div className="flex-1 overflow-auto font-mono text-[12px] leading-5">
         <pre className="min-w-full">

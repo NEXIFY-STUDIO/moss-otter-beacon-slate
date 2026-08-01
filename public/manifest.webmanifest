@@ -1,0 +1,19 @@
+{
+  "name": "COSY Studio",
+  "short_name": "COSY",
+  "description": "AI Visual IDE with multi-agent pipeline and human-in-the-loop diffs.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d0e11",
+  "theme_color": "#D96B43",
+  "lang": "sk",
+  "icons": [
+    {
+      "src": "/cosy-logo-3d-tight.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

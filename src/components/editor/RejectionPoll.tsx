@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -14,6 +15,11 @@ const REASONS = [
   "Other",
 ] as const;
 
+const rejectionSchema = z.object({
+  reason: z.enum(REASONS),
+  freeText: z.string().max(2000).optional(),
+});
+
 export function RejectionPoll(): React.JSX.Element {
   const open = useAgentStore((s) => s.rejectionOpen);
   const setRejectionOpen = useAgentStore((s) => s.setRejectionOpen);
@@ -23,30 +29,81 @@ export function RejectionPoll(): React.JSX.Element {
   const addMessage = useAgentStore((s) => s.addMessage);
   const pushStatus = useAgentStore((s) => s.pushStatus);
   const setProposal = useFileStore((s) => s.setProposal);
-  const [reason, setReason] = useState<string>(REASONS[0]);
+  const [reason, setReason] = useState<(typeof REASONS)[number]>(REASONS[0]);
   const [freeText, setFreeText] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const submit = () => {
-    setLastRejection({
+    const parsed = rejectionSchema.safeParse({
       reason,
-      ...(freeText.trim() ? { freeText: freeText.trim() } : {}),
+      freeText: freeText.trim() || undefined,
+    });
+    if (!parsed.success) return;
+    const data = parsed.data;
+    setLastRejection({
+      reason: data.reason,
+      ...(data.freeText ? { freeText: data.freeText } : {}),
     });
     setProposal(null);
     setHitlVisible(false);
     setRejectionOpen(false);
     setPhase("idle");
-    pushStatus(`Rejected · ${reason}`);
+    pushStatus(`Rejected · ${data.reason}`);
     addMessage({
       role: "assistant",
       agentType: "ORCHESTRATOR",
-      content: `Zmena zamietnutá (${reason}). ${freeText.trim() ? `Poznámka: ${freeText.trim()}` : "Priprav nový prompt s viac detailmi."}`,
+      content: `Zmena zamietnutá (${data.reason}). ${
+        data.freeText
+          ? `Poznámka: ${data.freeText}`
+          : "Priprav nový prompt s viac detailmi."
+      }`,
     });
     setFreeText("");
   };
 
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const first = panelRef.current?.querySelector<HTMLElement>(
+      "button, textarea, [href], input",
+    );
+    first?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setRejectionOpen(false);
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const focusables = [
+        ...panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((el) => !el.hasAttribute("disabled"));
+      if (focusables.length === 0) return;
+      const firstEl = focusables[0];
+      const lastEl = focusables[focusables.length - 1];
+      if (!firstEl || !lastEl) return;
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      prev?.focus?.();
+    };
+  }, [open, setRejectionOpen]);
+
   return (
     <AnimatePresence>
-      {open && (
+      {open ? (
         <motion.div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-charcoal/40 backdrop-blur-sm"
           initial={{ opacity: 0 }}
@@ -58,6 +115,7 @@ export function RejectionPoll(): React.JSX.Element {
           onClick={() => setRejectionOpen(false)}
         >
           <motion.div
+            ref={panelRef}
             initial={{ opacity: 0, scale: 0.96, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.98, y: 4 }}
@@ -71,7 +129,11 @@ export function RejectionPoll(): React.JSX.Element {
             <p className="text-xs text-charcoal/55 dark:text-cream/50 mt-1">
               Feedback trénuje ďalší run pipeline (AiInteractionLog).
             </p>
-            <div className="mt-4 flex flex-wrap gap-2" role="radiogroup" aria-label="Rejection reasons">
+            <div
+              className="mt-4 flex flex-wrap gap-2"
+              role="radiogroup"
+              aria-label="Rejection reasons"
+            >
               {REASONS.map((r) => (
                 <button
                   key={r}
@@ -80,7 +142,7 @@ export function RejectionPoll(): React.JSX.Element {
                   aria-checked={reason === r}
                   onClick={() => setReason(r)}
                   className={cn(
-                    "border-2 px-2.5 py-1 text-xs font-semibold transition-colors",
+                    "border-2 px-2.5 py-1 text-xs font-semibold transition-colors min-h-10",
                     reason === r
                       ? "border-charcoal bg-terracotta text-white shadow-brutal-sm"
                       : "border-charcoal/20 dark:border-cream/20 bg-transparent text-charcoal dark:text-cream hover:border-terracotta/50",
@@ -102,17 +164,24 @@ export function RejectionPoll(): React.JSX.Element {
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="min-h-10"
                 onClick={() => setRejectionOpen(false)}
               >
                 Cancel
               </Button>
-              <Button type="button" variant="destructive" size="sm" onClick={submit}>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="min-h-10"
+                onClick={submit}
+              >
                 Submit rejection
               </Button>
             </div>
           </motion.div>
         </motion.div>
-      )}
+      ) : null}
     </AnimatePresence>
   );
 }

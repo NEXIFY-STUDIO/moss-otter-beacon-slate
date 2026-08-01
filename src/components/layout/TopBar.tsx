@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Command, Sparkles, Circle } from "lucide-react";
+import { Command, Rocket, Circle } from "lucide-react";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ export function TopBar({
   const agents = useAgentStore((s) => s.agents);
   const phase = useAgentStore((s) => s.phase);
   const toggleCommand = useUiStore((s) => s.toggleCommand);
+  const setPublishOpen = useUiStore((s) => s.setPublishOpen);
 
   return (
     <header
@@ -131,14 +132,16 @@ export function TopBar({
           <Command className="h-3.5 w-3.5" aria-hidden />
           <span className="text-xs">Cmd+K</span>
         </Button>
-        <ThemeToggle />
-        <div
-          className="hidden sm:flex h-8 w-8 items-center justify-center border-2 border-charcoal/20 dark:border-cream/20 bg-cream dark:bg-slate text-xs font-bold"
-          aria-label="User profile placeholder"
-          title="Profile (auth coming later)"
+        <Button
+          size="sm"
+          className="hidden sm:inline-flex min-h-10 gap-1.5"
+          onClick={() => setPublishOpen(true)}
+          aria-label="Publish project"
         >
-          <Sparkles className="h-3.5 w-3.5 text-terracotta" aria-hidden />
-        </div>
+          <Rocket className="h-3.5 w-3.5" aria-hidden />
+          Publish
+        </Button>
+        <ThemeToggle />
       </div>
     </header>
   );

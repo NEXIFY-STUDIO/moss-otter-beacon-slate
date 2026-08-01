@@ -7,9 +7,11 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useFileStore } from "@/stores/use-file-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -94,16 +96,23 @@ function TreeNode({
   node,
   depth,
   onFileSelect,
+  renamingPath,
+  setRenamingPath,
 }: {
   node: FileNode;
   depth: number;
   onFileSelect?: (() => void) | undefined;
+  renamingPath: string | null;
+  setRenamingPath: (path: string | null) => void;
 }): React.JSX.Element {
   const activeFilePath = useFileStore((s) => s.activeFilePath);
   const setActiveFile = useFileStore((s) => s.setActiveFile);
   const deleteFile = useFileStore((s) => s.deleteFile);
+  const renameFile = useFileStore((s) => s.renameFile);
   const [open, setOpen] = useState(true);
+  const [renameValue, setRenameValue] = useState(node.path);
   const isActive = activeFilePath === node.path;
+  const isRenaming = renamingPath === node.path;
 
   if (node.type === "folder") {
     return (
@@ -133,23 +142,67 @@ function TreeNode({
           )}
           <span className="truncate font-medium">{node.name}</span>
         </button>
-        {open &&
-          node.children?.map((child) => (
-            <TreeNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              onFileSelect={onFileSelect}
-            />
-          ))}
+        {open
+          ? node.children?.map((child) => (
+              <TreeNode
+                key={child.id}
+                node={child}
+                depth={depth + 1}
+                onFileSelect={onFileSelect}
+                renamingPath={renamingPath}
+                setRenamingPath={setRenamingPath}
+              />
+            ))
+          : null}
       </div>
+    );
+  }
+
+  if (isRenaming) {
+    return (
+      <form
+        className="flex flex-col gap-1 px-2 py-1.5"
+        style={{ paddingLeft: 6 + depth * 12 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          const err = renameFile(node.path, renameValue.trim());
+          if (err) {
+            toast.error(err.message);
+            return;
+          }
+          toast.success(`Renamed → ${renameValue.trim()}`);
+          setRenamingPath(null);
+        }}
+      >
+        <Input
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          aria-label="Rename file path"
+          className="h-9 text-xs shadow-none"
+          autoFocus
+        />
+        <div className="flex gap-1">
+          <Button type="submit" size="sm" className="h-8 text-[11px] flex-1">
+            Save
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 text-[11px]"
+            onClick={() => setRenamingPath(null)}
+          >
+            Cancel
+          </Button>
+        </div>
+      </form>
     );
   }
 
   return (
     <div
       className={cn(
-        "group flex items-center gap-1 pr-1 text-xs",
+        "group flex items-center gap-0.5 pr-1 text-xs",
         isActive && "bg-terracotta/15 dark:bg-terracotta/20",
       )}
       style={{ paddingLeft: 6 + depth * 12 }}
@@ -168,9 +221,39 @@ function TreeNode({
       </button>
       <button
         type="button"
-        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-2 text-charcoal/50 hover:text-diff-del-text min-h-[40px] min-w-[40px] flex items-center justify-center"
+        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-2 text-charcoal/50 hover:text-terracotta min-h-[40px] min-w-[36px] flex items-center justify-center"
+        aria-label={`Rename ${node.path}`}
+        onClick={() => {
+          setRenameValue(node.path);
+          setRenamingPath(node.path);
+        }}
+      >
+        <Pencil className="h-3.5 w-3.5" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-2 text-charcoal/50 hover:text-diff-del-text min-h-[40px] min-w-[36px] flex items-center justify-center"
         aria-label={`Delete ${node.path}`}
-        onClick={() => deleteFile(node.path)}
+        onClick={() => {
+          const snapshot = useFileStore.getState().files.get(node.path);
+          const err = deleteFile(node.path);
+          if (err) {
+            toast.error(err.message);
+            return;
+          }
+          toast(`Deleted ${node.name}`, {
+            action: snapshot
+              ? {
+                  label: "Undo",
+                  onClick: () => {
+                    useFileStore
+                      .getState()
+                      .createFile(snapshot.path, snapshot.content, snapshot.language);
+                  },
+                }
+              : undefined,
+          });
+        }}
       >
         <Trash2 className="h-3.5 w-3.5" aria-hidden />
       </button>
@@ -189,6 +272,7 @@ export function FileTree({
   const createFile = useFileStore((s) => s.createFile);
   const [creating, setCreating] = useState(false);
   const [newPath, setNewPath] = useState("");
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const tree = useMemo(() => buildTree(files), [files]);
 
   return (
@@ -213,18 +297,22 @@ export function FileTree({
           <Plus className="h-3.5 w-3.5" aria-hidden />
         </Button>
       </div>
-      {creating && (
+      {creating ? (
         <form
           className="p-2 border-b border-charcoal/10 dark:border-cream/10 space-y-1"
           onSubmit={(e) => {
             e.preventDefault();
             const path = newPath.trim();
-            if (path) {
-              createFile(path, "");
-              setNewPath("");
-              setCreating(false);
-              onFileSelect?.();
+            if (!path) return;
+            const err = createFile(path, "");
+            if (err) {
+              toast.error(err.message);
+              return;
             }
+            toast.success(`Created ${path}`);
+            setNewPath("");
+            setCreating(false);
+            onFileSelect?.();
           }}
         >
           <Input
@@ -253,7 +341,7 @@ export function FileTree({
             </Button>
           </div>
         </form>
-      )}
+      ) : null}
       <div className="flex-1 overflow-y-auto py-1 overscroll-contain">
         {tree.map((node) => (
           <TreeNode
@@ -261,6 +349,8 @@ export function FileTree({
             node={node}
             depth={0}
             onFileSelect={onFileSelect}
+            renamingPath={renamingPath}
+            setRenamingPath={setRenamingPath}
           />
         ))}
       </div>

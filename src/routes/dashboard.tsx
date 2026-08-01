@@ -1,11 +1,14 @@
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowRight, FolderKanban, Plus } from "lucide-react";
+import { toast } from "sonner";
 import { AppShell } from "@/components/layout/AppShell";
 import { AppBottomNav } from "@/components/layout/AppBottomNav";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DEMO_PROJECTS } from "@/lib/demo-data";
-import { DEMO_PROJECT_ID } from "@/lib/demo-data";
+import { DEMO_PROJECTS, DEMO_PROJECT_ID } from "@/lib/demo-data";
+import { createProject } from "@/lib/projects/server";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/dashboard")({
@@ -13,6 +16,37 @@ export const Route = createFileRoute("/dashboard")({
 });
 
 function DashboardPage() {
+  const { user, isPending } = useCurrentUserState();
+  const [creating, setCreating] = useState(false);
+
+  const onNew = async () => {
+    if (isPending) return;
+    if (!user) {
+      toast.error("Sign in required to create a project");
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await createProject({
+        data: {
+          title: "New COSY project",
+          description: "Created from dashboard",
+          isPublic: false,
+        },
+      });
+      toast.success(`Project created: ${res.id.slice(0, 8)}…`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Create failed";
+      if (msg === "Unauthorized" || /Unauthorized/i.test(msg)) {
+        toast.error("Unauthorized — sign in to create projects");
+      } else {
+        toast.error(msg);
+      }
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <AppShell className="bg-black text-white">
       <header className="shrink-0 border-b border-white/10 px-4 py-3 flex items-end justify-between gap-3">
@@ -27,15 +61,25 @@ function DashboardPage() {
         <Button
           size="sm"
           className="min-h-11 shrink-0 rounded-xl border-0"
-          disabled
-          title="S22"
+          onClick={() => void onNew()}
+          disabled={creating}
+          aria-label="Create new project"
         >
           <Plus className="h-4 w-4" aria-hidden />
-          New
+          {creating ? "Creating…" : "New"}
         </Button>
       </header>
       <main className="app-scroll">
         <div className="mx-auto max-w-lg sm:max-w-3xl px-4 py-5 space-y-3 pb-8">
+          {!user && !isPending ? (
+            <p className="text-xs text-white/45 rounded-xl border border-white/10 px-3 py-2">
+              Demo projects below.{" "}
+              <Link to="/login" className="text-terracotta font-semibold">
+                Sign in
+              </Link>{" "}
+              for server-owned CRUD.
+            </p>
+          ) : null}
           {DEMO_PROJECTS.map((project) => (
             <article
               key={project.id}

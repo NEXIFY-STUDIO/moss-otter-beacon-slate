@@ -1,12 +1,16 @@
 import { useCallback, useRef, useState } from "react";
 import { ImagePlus, Send, Square } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentStore } from "@/stores/use-agent-store";
-import { useFileStore } from "@/stores/use-file-store";
 import { useUiStore } from "@/stores/use-ui-store";
-import { DEMO_PROPOSAL_MODIFIED } from "@/lib/demo-data";
+import { promptInputSchema } from "@/lib/validations/ai-schemas";
+import { DEMO_PROJECT_ID } from "@/lib/demo-data";
 import type { ChatAttachment } from "@/types/agent";
+
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 export function PromptInput(): React.JSX.Element {
   const [value, setValue] = useState("");
@@ -16,8 +20,6 @@ export function PromptInput(): React.JSX.Element {
   const addMessage = useAgentStore((s) => s.addMessage);
   const runDemoPipeline = useAgentStore((s) => s.runDemoPipeline);
   const abort = useAgentStore((s) => s.abort);
-  const setProposal = useFileStore((s) => s.setProposal);
-  const files = useFileStore((s) => s.files);
   const setMobilePane = useUiStore((s) => s.setMobilePane);
 
   const onPickImage = useCallback((filesList: FileList | null) => {
@@ -26,7 +28,14 @@ export function PromptInput(): React.JSX.Element {
     Array.from(filesList)
       .slice(0, 3)
       .forEach((file) => {
-        if (!file.type.startsWith("image/")) return;
+        if (!ALLOWED_TYPES.has(file.type)) {
+          toast.error(`Unsupported type: ${file.type || file.name}`);
+          return;
+        }
+        if (file.size > MAX_IMAGE_BYTES) {
+          toast.error(`${file.name} exceeds 2MB`);
+          return;
+        }
         next.push({
           id: crypto.randomUUID(),
           name: file.name,
@@ -40,31 +49,46 @@ export function PromptInput(): React.JSX.Element {
   const submit = async () => {
     const prompt = value.trim();
     if (!prompt || isStreaming) return;
+
+    const parsed = promptInputSchema.safeParse({
+      prompt,
+      projectId: DEMO_PROJECT_ID,
+      imageDataUrls: attachments.map((a) => a.previewUrl),
+    });
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message ?? "Invalid prompt");
+      return;
+    }
+
     addMessage({
       role: "user",
-      content: prompt,
+      content: parsed.data.prompt,
       ...(attachments.length > 0 ? { attachments } : {}),
     });
     setValue("");
+    const sentAttachments = attachments;
     setAttachments([]);
-    const original = files.get("src/App.tsx")?.content ?? "";
-    setProposal({
-      path: "src/App.tsx",
-      original,
-      modified: DEMO_PROPOSAL_MODIFIED,
-      language: "tsx",
-      summary: prompt.slice(0, 120),
-    });
-    // On phone, switch to Code so HitL is visible after pipeline
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches) {
+
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 1023px)").matches
+    ) {
       setMobilePane("code");
     }
-    await runDemoPipeline();
+
+    await runDemoPipeline(parsed.data.prompt, {
+      imageCount: sentAttachments.length,
+      projectId: DEMO_PROJECT_ID,
+    });
+
+    for (const a of sentAttachments) {
+      if (a.previewUrl.startsWith("blob:")) URL.revokeObjectURL(a.previewUrl);
+    }
   };
 
   return (
     <div className="border-t-2 border-charcoal/10 dark:border-cream/10 p-2.5 sm:p-3 space-y-2 bg-cream dark:bg-slate">
-      {attachments.length > 0 && (
+      {attachments.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {attachments.map((a) => (
             <div
@@ -89,14 +113,13 @@ export function PromptInput(): React.JSX.Element {
             </div>
           ))}
         </div>
-      )}
+      ) : null}
       <Textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder="Popíš zmenu… (Enter odoslať)"
         aria-label="Prompt input"
         className="min-h-[64px] max-h-[28dvh] text-sm shadow-none text-base sm:text-sm"
-        // text-base (16px) on mobile prevents iOS zoom-on-focus
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
@@ -110,7 +133,7 @@ export function PromptInput(): React.JSX.Element {
           <input
             ref={fileRef}
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/webp"
             multiple
             className="sr-only"
             onChange={(e) => onPickImage(e.target.files)}

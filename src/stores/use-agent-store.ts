@@ -5,6 +5,11 @@ import type {
   ChatMessage,
   RejectionFeedback,
 } from "@/types/agent";
+import { runOrchestrator } from "@/lib/ai/orchestrator";
+import { logAiInteraction } from "@/lib/ai/log-interaction";
+import { useFileStore } from "@/stores/use-file-store";
+import { DEMO_PROJECT_ID } from "@/lib/demo-data";
+import type { FileLanguage } from "@/types/file";
 
 interface AgentState {
   phase: AgentPhase;
@@ -17,6 +22,7 @@ interface AgentState {
   rejectionOpen: boolean;
   lastRejection: RejectionFeedback | null;
   statusLog: string[];
+  lastLogIds: string[];
   setPhase: (phase: AgentPhase) => void;
   setAgentState: (
     type: AgentStatus["type"],
@@ -33,7 +39,10 @@ interface AgentState {
   setLastRejection: (feedback: RejectionFeedback | null) => void;
   pushStatus: (line: string) => void;
   resetPipeline: () => void;
-  runDemoPipeline: () => Promise<void>;
+  runDemoPipeline: (
+    prompt?: string,
+    options?: { imageCount?: number; projectId?: string },
+  ) => Promise<void>;
   abort: () => void;
 }
 
@@ -67,7 +76,29 @@ const seededAgents: AgentStatus[] = [
   },
 ];
 
-let abortFlag = false;
+let abortController: AbortController | null = null;
+let tokenThrottle: ReturnType<typeof setTimeout> | null = null;
+let pendingToken: { path: string; accumulated: string } | null = null;
+
+async function persistLog(input: {
+  projectId: string;
+  agentType: "G0" | "G1" | "G2" | "ORCHESTRATOR";
+  model: string;
+  prompt: string;
+  responseSummary?: string;
+  latencyMs: number;
+  tokens: number;
+  imageCount: number;
+  status: "ok" | "error" | "aborted";
+}): Promise<string | null> {
+  try {
+    const res = await logAiInteraction({ data: input });
+    return res.id;
+  } catch (err) {
+    console.warn("[AiInteractionLog] persist failed", err);
+    return null;
+  }
+}
 
 export const useAgentStore = create<AgentState>((set, get) => ({
   phase: "awaiting_approval",
@@ -100,6 +131,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     "G0 → G1 → G2 pipeline ready",
     "HitL card visible · Enter approve · Esc reject",
   ],
+  lastLogIds: [],
 
   setPhase: (phase) => set({ phase }),
 
@@ -147,7 +179,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     })),
 
   resetPipeline: () => {
-    abortFlag = false;
+    abortController?.abort();
+    abortController = null;
+    if (tokenThrottle) clearTimeout(tokenThrottle);
+    tokenThrottle = null;
+    pendingToken = null;
     set({
       phase: "idle",
       agents: defaultAgents.map((a) => ({ ...a })),
@@ -158,17 +194,39 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   abort: () => {
-    abortFlag = true;
+    abortController?.abort();
+    abortController = null;
+    if (tokenThrottle) clearTimeout(tokenThrottle);
+    tokenThrottle = null;
+    pendingToken = null;
+    useFileStore.getState().setProposal(null);
     set({
       phase: "aborted",
       isStreaming: false,
       hitlVisible: false,
     });
     get().pushStatus("Pipeline aborted by user");
+    get().addMessage({
+      role: "assistant",
+      agentType: "ORCHESTRATOR",
+      content: "Pipeline zastavená. Môžeš poslať nový prompt.",
+    });
   },
 
-  runDemoPipeline: async () => {
-    abortFlag = false;
+  runDemoPipeline: async (
+    prompt = "Refresh hero section with dual CTAs",
+    options,
+  ) => {
+    abortController?.abort();
+    abortController = new AbortController();
+    const signal = abortController.signal;
+    if (tokenThrottle) clearTimeout(tokenThrottle);
+    tokenThrottle = null;
+    pendingToken = null;
+
+    const projectId = options?.projectId ?? DEMO_PROJECT_ID;
+    const imageCount = options?.imageCount ?? 0;
+
     const {
       setAgentState,
       setPhase,
@@ -178,59 +236,208 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       setMetrics,
       setHitlVisible,
     } = get();
+
     setStreaming(true);
     setHitlVisible(false);
     setPhase("planning");
-    setAgentState("G0", { state: "running", message: "Planning files…" });
+    setAgentState("G0", { state: "running", message: "Planning…" });
     setAgentState("G1", { state: "idle", message: "Waiting" });
     setAgentState("G2", { state: "idle", message: "Waiting" });
-    pushStatus("G0 Planner started");
-    await sleep(700);
-    if (abortFlag) return;
-    setAgentState("G0", {
-      state: "success",
-      message: "1 file planned",
-      latencyMs: 680,
-    });
-    pushStatus("G0 complete · src/App.tsx");
+    pushStatus("Orchestrator · G0 started");
 
-    setPhase("coding");
-    setAgentState("G1", { state: "running", message: "Streaming code…" });
-    pushStatus("G1 Coder streaming tokens");
-    await sleep(900);
-    if (abortFlag) return;
-    setAgentState("G1", {
-      state: "success",
-      message: "Diff ready",
-      latencyMs: 910,
-    });
-    pushStatus("G1 complete · proposal ready");
+    const fileState = useFileStore.getState();
+    const contentMap = fileState.getContentMap();
+    const originals = new Map(contentMap);
+    const logIds: string[] = [];
 
-    setPhase("auditing");
-    setAgentState("G2", { state: "running", message: "Auditing…" });
-    await sleep(500);
-    if (abortFlag) return;
-    setAgentState("G2", {
-      state: "success",
-      message: "0 critical issues",
-      latencyMs: 480,
-    });
-    pushStatus("G2 Auditor passed");
+    const flushTokenProposal = () => {
+      tokenThrottle = null;
+      if (!pendingToken || signal.aborted) return;
+      const { path, accumulated } = pendingToken;
+      useFileStore.getState().setProposal({
+        path,
+        original: originals.get(path) ?? "",
+        modified: accumulated,
+        language: guessLang(path),
+        summary: `Streaming ${path}…`,
+      });
+    };
 
-    setMetrics(2070, 1920);
-    setPhase("awaiting_approval");
+    await runOrchestrator({
+      prompt,
+      files: contentMap,
+      signal,
+      onEvent: (event) => {
+        if (signal.aborted) return;
+        switch (event.type) {
+          case "phase":
+            if (event.phase === "planning") setPhase("planning");
+            if (event.phase === "coding") setPhase("coding");
+            if (event.phase === "auditing") setPhase("auditing");
+            if (event.phase === "done") setPhase("awaiting_approval");
+            if (event.phase === "error") setPhase("idle");
+            break;
+          case "agent":
+            setAgentState(event.agent, {
+              state: event.state,
+              message: event.message,
+              ...(event.latencyMs !== undefined
+                ? { latencyMs: event.latencyMs }
+                : {}),
+            });
+            pushStatus(`${event.agent} · ${event.message}`);
+            break;
+          case "token": {
+            pendingToken = {
+              path: event.path,
+              accumulated: event.accumulated,
+            };
+            if (!tokenThrottle) {
+              tokenThrottle = setTimeout(flushTokenProposal, 100);
+            }
+            break;
+          }
+          case "code": {
+            if (tokenThrottle) clearTimeout(tokenThrottle);
+            tokenThrottle = null;
+            pendingToken = null;
+            const pages = event.codeMap.files.filter((f) =>
+              f.path.includes("/pages/") || f.path === "src/App.tsx" || f.path === "index.html",
+            );
+            useFileStore.getState().setProposalFromCodeMap(
+              event.codeMap.files,
+              originals,
+              `Multi-page output · ${event.codeMap.files.length} file(s) · ${pages.length} routes/shell`,
+            );
+            pushStatus(
+              `G1 · ${event.codeMap.files.length} files (pages + sections) ready for Approve`,
+            );
+            break;
+          }
+          case "audit":
+            if (!event.audit.passed) {
+              pushStatus("G2 critical issues — HitL still available (override)");
+              addMessage({
+                role: "assistant",
+                agentType: "G2",
+                content: event.audit.issues
+                  .map((i) => `[${i.severity}] ${i.path ?? "—"}: ${i.message}`)
+                  .join("\n"),
+              });
+            } else {
+              pushStatus("G2 Auditor passed");
+            }
+            break;
+          case "metrics": {
+            setMetrics(event.latencyMs, event.tokens);
+            pushStatus(
+              `Metrics · ${event.latencyMs}ms · ${event.tokens} tok · log ${event.log.length}`,
+            );
+            // Persist per-agent AiInteractionLog rows (fire-and-forget)
+            void (async () => {
+              for (const row of event.log) {
+                const agentType = row.agentType as "G0" | "G1" | "G2";
+                const id = await persistLog({
+                  projectId,
+                  agentType,
+                  model: row.model,
+                  prompt,
+                  responseSummary: `${agentType} completed in ${row.latencyMs}ms`,
+                  latencyMs: row.latencyMs,
+                  tokens: row.tokens,
+                  imageCount,
+                  status: "ok",
+                });
+                if (id) logIds.push(id);
+              }
+              const orchId = await persistLog({
+                projectId,
+                agentType: "ORCHESTRATOR",
+                model: "mock-orchestrator",
+                prompt,
+                responseSummary: `E2E pipeline ${event.latencyMs}ms · ${event.tokens} tokens`,
+                latencyMs: event.latencyMs,
+                tokens: event.tokens,
+                imageCount,
+                status: "ok",
+              });
+              if (orchId) logIds.push(orchId);
+              set({ lastLogIds: logIds });
+              if (logIds.length > 0) {
+                pushStatus(
+                  `AiInteractionLog · ${logIds.length} row(s) persisted`,
+                );
+              }
+            })();
+            break;
+          }
+          case "error":
+            if (event.message === "Aborted") {
+              setStreaming(false);
+              void persistLog({
+                projectId,
+                agentType: "ORCHESTRATOR",
+                model: "mock-orchestrator",
+                prompt,
+                responseSummary: "Aborted by user",
+                latencyMs: 0,
+                tokens: 0,
+                imageCount,
+                status: "aborted",
+              });
+              return;
+            }
+            setAgentState("G0", { state: "error", message: event.message });
+            pushStatus(`Error · ${event.message}`);
+            addMessage({
+              role: "assistant",
+              agentType: "ORCHESTRATOR",
+              content: `Pipeline error: ${event.message}`,
+            });
+            setStreaming(false);
+            void persistLog({
+              projectId,
+              agentType: "ORCHESTRATOR",
+              model: "mock-orchestrator",
+              prompt,
+              responseSummary: event.message,
+              latencyMs: 0,
+              tokens: 0,
+              imageCount,
+              status: "error",
+            });
+            break;
+          default:
+            break;
+        }
+      },
+    });
+
+    if (signal.aborted) {
+      setStreaming(false);
+      return;
+    }
+
     setStreaming(false);
     setHitlVisible(true);
+    setPhase("awaiting_approval");
     addMessage({
       role: "assistant",
       agentType: "ORCHESTRATOR",
       content:
-        "Nový diff pripravený. Skontroluj stredný panel a potvrď Enter / Approve alebo zamietni Esc / Reject.",
+        "Multi-page diff ready (home + sections + new pages). Approve zapíše všetky súbory a obnoví preview so in-app navigáciou (žiadne opustenie hostu).",
     });
     pushStatus("Awaiting human approval");
+    abortController = null;
   },
 }));
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function guessLang(path: string): FileLanguage {
+  if (path.endsWith(".tsx")) return "tsx";
+  if (path.endsWith(".ts")) return "ts";
+  if (path.endsWith(".css")) return "css";
+  if (path.endsWith(".json")) return "json";
+  if (path.endsWith(".html")) return "html";
+  if (path.endsWith(".md")) return "md";
+  return "txt";
 }

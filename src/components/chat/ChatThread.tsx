@@ -46,6 +46,18 @@ export function ChatThread(): React.JSX.Element {
               </Badge>
             )}
             <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+            {msg.attachments && msg.attachments.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {msg.attachments.map((a) => (
+                  <img
+                    key={a.id}
+                    src={a.previewUrl}
+                    alt={a.name}
+                    className="h-14 w-14 object-cover border-2 border-white/40"
+                  />
+                ))}
+              </div>
+            ) : null}
           </article>
         );
       })}
